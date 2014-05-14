@@ -17,6 +17,13 @@ module Agents =
 
     let currentDateTime = DateTime.Now.ToString()
 
+    type AgentsOverallConfiguration =
+        {
+            AgentCpuWorkersCount: int
+            AgentGpuWorkersCount: int
+            AgentDataReadersCount: int
+        }
+
     type AgentCpuWorkerConfiguration =
         {
             Empty: unit
@@ -63,35 +70,6 @@ module Agents =
     | DataNeeded of AsyncReplyChannel<'TaskResult>
     | Data of 'TaskParameter * Agent<'TaskParameter, 'TaskResult>
     | Start 
-
-    type AgentManager<'CpuTaskParameter, 'CpuTaskResult, 'GpuTaskParameter, 'GpuTaskResult, 'OverallResult, 'ReadingParameter, 'Data> =
-        inherit Agent<unit, 'OverallResult>
-
-        val manager: MailboxProcessor<Message<unit, 'OverallResult>>
-
-        new (agentId, logger, dataSource: IDataSource<'Data>) = {
-            inherit Agent<unit, 'OverallResult>(agentId, logger)
-
-            manager = MailboxProcessor.Start(fun inbox -> 
-                async {
-                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
-                    
-                    while true do
-                        let! msg = inbox.Receive()
-
-                        match msg with
-                        | Start -> ()
-                        | _ -> ()
-                }
-            )
-        }
-
-        override this.Post(msg) = this.manager.Post msg
-        override this.PostAndAsyncReply(buildMessage: AsyncReplyChannel<'Reply> -> Message<unit, 'OverallResult>) = 
-            this.manager.PostAndAsyncReply buildMessage
-
-        override this.Dispose() = (this.manager:> IDisposable).Dispose()
-
 
     type AgentDataReader<'ReadingParameter, 'Data> =
         inherit Agent<'ReadingParameter, 'Data>
@@ -207,3 +185,40 @@ module Agents =
             this.commandQueue.Dispose()
             this.provider.CloseAllBuffers()
             (this.worker:> IDisposable).Dispose()
+
+    type AgentManager<'CpuTaskParameter, 'CpuTaskResult, 'GpuTaskParameter, 'GpuTaskResult, 'OverallResult, 'ReadingParameter, 'Data
+        when 'GpuTaskParameter: (new: unit -> 'GpuTaskParameter) and 
+            'GpuTaskParameter: struct and 
+            'GpuTaskParameter:> ValueType and 
+            'GpuTaskParameter:> INDRangeDimension> =
+        
+        inherit Agent<unit, 'OverallResult>
+
+        val manager: MailboxProcessor<Message<unit, 'OverallResult>>
+
+        new (agentId, logger, overallConfigs, dataSource: IDataSource<'Data>) = {
+            inherit Agent<unit, 'OverallResult>(agentId, logger)
+
+            manager = MailboxProcessor.Start(fun inbox -> 
+                async {
+                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
+
+                    let freeCpuWorkers = new List<AgentCpuWorker<'CpuTaskParameter, 'CpuTaskResult>>()
+                    let freeGpuWorkers = new List<AgentGpuWorker<'GpuTaskParameter, 'GpuTaskResult>>()
+                    let freeDataReaders = new List<AgentDataReader<'ReadingParameter, 'Data>>()
+
+                    while true do
+                        let! msg = inbox.Receive()
+
+                        match msg with
+                        | Start -> ()
+                        | _ -> ()
+                }
+            )
+        }
+
+        override this.Post(msg) = this.manager.Post msg
+        override this.PostAndAsyncReply(buildMessage: AsyncReplyChannel<'Reply> -> Message<unit, 'OverallResult>) = 
+            this.manager.PostAndAsyncReply buildMessage
+
+        override this.Dispose() = (this.manager:> IDisposable).Dispose()
