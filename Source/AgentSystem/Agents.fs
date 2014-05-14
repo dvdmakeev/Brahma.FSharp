@@ -17,7 +17,17 @@ module Agents =
 
     let currentDateTime = DateTime.Now.ToString()
 
-    type AgentsConfiguration =
+    type AgentCpuWorkerConfiguration =
+        {
+            Empty: unit
+        }
+
+    type AgentGpuWorkerConfiguration =
+        {
+            Empty: unit
+        }
+
+    type AgentDataReaderConfiguration =
         {
             Empty: unit
         }
@@ -54,10 +64,34 @@ module Agents =
     | Data of 'TaskParameter * Agent<'TaskParameter, 'TaskResult>
     | Start 
 
-    type AgentManager<'CpuTaskParameter, 'CpuTaskResult, 'GpuTaskParameter, 'GpuTaskResult, 'ReadingParameter, 'Data> =
-        
-        new (dataSource: IDataSource<'Data>) = {
+    type AgentManager<'CpuTaskParameter, 'CpuTaskResult, 'GpuTaskParameter, 'GpuTaskResult, 'OverallResult, 'ReadingParameter, 'Data> =
+        inherit Agent<unit, 'OverallResult>
+
+        val manager: MailboxProcessor<Message<unit, 'OverallResult>>
+
+        new (agentId, logger, dataSource: IDataSource<'Data>) = {
+            inherit Agent<unit, 'OverallResult>(agentId, logger)
+
+            manager = MailboxProcessor.Start(fun inbox -> 
+                async {
+                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
+                    
+                    while true do
+                        let! msg = inbox.Receive()
+
+                        match msg with
+                        | Start -> ()
+                        | _ -> ()
+                }
+            )
         }
+
+        override this.Post(msg) = this.manager.Post msg
+        override this.PostAndAsyncReply(buildMessage: AsyncReplyChannel<'Reply> -> Message<unit, 'OverallResult>) = 
+            this.manager.PostAndAsyncReply buildMessage
+
+        override this.Dispose() = (this.manager:> IDisposable).Dispose()
+
 
     type AgentDataReader<'ReadingParameter, 'Data> =
         inherit Agent<'ReadingParameter, 'Data>
@@ -69,8 +103,9 @@ module Agents =
 
             dataReader = MailboxProcessor.Start(fun inbox ->
                 async {
+                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
+                    
                     while true do
-                        logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
                         let! msg = inbox.Receive()
 
                         match msg with
@@ -81,7 +116,8 @@ module Agents =
                         | Start | DoTask(_, _) | Data(_, _) -> 
                             raise (NotSupportedMessageException(sprintf "NotSupportedMessageException from %s" agentId))
 
-                })
+                }
+            )
         }
 
         override this.Post(msg) = this.dataReader.Post msg
@@ -100,8 +136,9 @@ module Agents =
             
             worker = MailboxProcessor.Start(fun inbox ->
                 async {
+                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
+                    
                     while true do
-                        logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
                         let! msg = inbox.Receive()
                         
                         match msg with
