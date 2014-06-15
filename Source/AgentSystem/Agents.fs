@@ -50,9 +50,9 @@ module AgentsBase =
         {
             DeviceType: DeviceType
             PlatformName: string
-            CompileOptions: CompileOptions
-            TrasnlatorOptions: TranslatorOption list
-            OutCode: string ref
+//            CompileOptions: CompileOptions
+//            TrasnlatorOptions: TranslatorOption list
+//            OutCode: string ref
         }
 
     type IDataSource<'Data> =
@@ -201,37 +201,36 @@ module AgentsBase =
             resultReceiver: Agent<MessageManager<'CpuTaskParameter, 'CpuTaskResult,
                                                      'GpuTaskNecessaryParameter, 'GpuTaskAdditionalParameter, 'GpuTaskResult,
                                                      'ReadingParameter, 'Data,
-                                                     'ManagerParams, 'OverallResult>>) as this = {
+                                                     'ManagerParams, 'OverallResult>>) as this = 
+                                                     
+            let initializedProvider = ComputeProvider.Create(gpuConfiguration.PlatformName, gpuConfiguration.DeviceType)
+            {            
+                inherit Agent<MessageGpuWorker<'GpuTaskNecessaryParameter, 'GpuTaskAdditionalParameter, 'GpuTaskResult>>(agentId, logger)
             
-            inherit Agent<MessageGpuWorker<'GpuTaskNecessaryParameter, 'GpuTaskAdditionalParameter, 'GpuTaskResult>>(agentId, logger)
+                provider = initializedProvider
             
-            provider = ComputeProvider.Create(gpuConfiguration.PlatformName, gpuConfiguration.DeviceType)
-            commandQueue = new Brahma.OpenCL.CommandQueue(this.provider, this.provider.Devices |> Seq.head)
+                commandQueue = new Brahma.OpenCL.CommandQueue(initializedProvider, initializedProvider.Devices |> Seq.head)
         
-            worker = MailboxProcessor.Start(fun inbox ->
-                async {
-                    logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
+                worker = MailboxProcessor.Start(fun inbox ->
+                    async {
+                        logger.LogMessage(sprintf "%s initialized at %s time" agentId currentDateTime)
         
-                    let kernel, kernelPrepare, kernelRun = 
-                        this.provider.Compile(task, gpuConfiguration.CompileOptions, gpuConfiguration.TrasnlatorOptions, gpuConfiguration.OutCode)
+                        let kernel, kernelPrepare, kernelRun = this.provider.Compile(task)
                     
-                    logger.LogMessage("Before while")                    
-                    
-                    while true do
-                        let! msg = inbox.Receive()
-                        logger.LogMessage("Before while1")
-                        match msg with
-                        | DoGpuTask(parameters, additionalParams) ->
-                            kernelPrepare parameters additionalParams
-                            this.commandQueue.Add(kernelRun()).Finish() |> ignore
-                            let results = collectResults this.commandQueue parameters additionalParams this.provider
-                            resultReceiver.Post(GpuTaskDone(results, this))
+                        while true do
+                            let! msg = inbox.Receive()
+                            match msg with
+                            | DoGpuTask(parameters, additionalParams) ->
+                                kernelPrepare parameters additionalParams
+                                this.commandQueue.Add(kernelRun()).Finish() |> ignore
+                                let results = collectResults this.commandQueue parameters additionalParams this.provider
+                                resultReceiver.Post(GpuTaskDone(results, this))
                             
-                        | _ -> raise (NotSupportedMessageException(sprintf "NotSupportedMessageException from %s" agentId))
-                }
-            )
-        }
-        
+                            | _ -> raise (NotSupportedMessageException(sprintf "NotSupportedMessageException from %s" agentId))
+                    }
+                )
+            }
+
         override this.AgentType with get() = AgentType.GpuWorker
         
         override this.Post(msg) = this.worker.Post msg
@@ -465,7 +464,7 @@ module AgentsBase =
         
         member private this.CreateAgentId(agentType: AgentType) =
             match agentType with
-                | CpuWorker -> sprintf "%d%s" this.cpuWorkersCount (AgentType.CpuWorker.ToString())
-                | GpuWorker -> sprintf "%d%s" this.gpuWorkersCount (AgentType.GpuWorker.ToString())
-                | DataReader -> sprintf "%d%s" this.dataReadersCount (AgentType.DataReader.ToString())
+                | CpuWorker -> sprintf "%dCpuWorker" this.cpuWorkersCount
+                | GpuWorker -> sprintf "%dGpuWorker" this.gpuWorkersCount
+                | DataReader -> sprintf "%dDataReader" this.dataReadersCount
                 | _ -> raise (NotSupportedMessageException(""))
